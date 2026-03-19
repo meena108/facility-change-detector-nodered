@@ -1,4 +1,4 @@
-# 3D Facility Monitor — Node-RED Dashboard
+# Multi-Point Facility Change Detector — Node-RED Dashboard
 
 A real-time change detection dashboard built with Node-RED.
 Monitors distance sensor readings across 5 points in a facility
