@@ -1,0 +1,264 @@
+[
+    {
+        "id": "4056b00ab93f16e8",
+        "type": "tab",
+        "label": "3D Change Detector",
+        "disabled": false,
+        "info": ""
+    },
+    {
+        "id": "60e2be688658a057",
+        "type": "inject",
+        "z": "4056b00ab93f16e8",
+        "name": "Scan every 5 seconds",
+        "repeat": "5",
+        "crontab": "",
+        "once": true,
+        "onceDelay": "1",
+        "topic": "scan",
+        "payload": "",
+        "payloadType": "date",
+        "x": 160,
+        "y": 80,
+        "wires": [
+            [
+                "249d8d86a7e9fbc8"
+            ]
+        ]
+    },
+    {
+        "id": "dff9b51ec04a091e",
+        "type": "inject",
+        "z": "4056b00ab93f16e8",
+        "name": "Reset baseline",
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "topic": "reset",
+        "payload": "reset",
+        "payloadType": "str",
+        "x": 160,
+        "y": 160,
+        "wires": [
+            [
+                "249d8d86a7e9fbc8"
+            ]
+        ]
+    },
+    {
+        "id": "cdcca1269293d7ac",
+        "type": "ui_button",
+        "z": "4056b00ab93f16e8",
+        "name": "Reset Baseline Button",
+        "group": "b077085517919e38",
+        "order": 5,
+        "width": "6",
+        "height": "1",
+        "passthru": false,
+        "label": "Reset Baseline",
+        "tooltip": "",
+        "color": "",
+        "bgcolor": "#e65100",
+        "icon": "",
+        "payload": "reset",
+        "payloadType": "str",
+        "topic": "reset",
+        "topicType": "str",
+        "x": 170,
+        "y": 240,
+        "wires": [
+            [
+                "249d8d86a7e9fbc8"
+            ]
+        ]
+    },
+    {
+        "id": "249d8d86a7e9fbc8",
+        "type": "function",
+        "z": "4056b00ab93f16e8",
+        "name": "Simulate 5 sensor points",
+        "func": "var state = flow.get('facilityState') || {\n    baseline: null,\n    scanCount: 0,\n    changeLog: []\n};\n\nif (msg.payload === 'reset') {\n    state.baseline = null;\n    state.scanCount = 0;\n    state.changeLog = [];\n    flow.set('facilityState', state);\n    flow.set('lastScanData', null);\n    node.warn('Baseline reset.');\n    return null;\n}\n\nstate.scanCount += 1;\n\nvar baseDistances = [250, 180, 300, 220, 95];\nvar pointNames = ['North wall', 'East wall', 'South wall', 'West wall', 'Centre object'];\n\nfunction noise() {\n    return (Math.random() - 0.5) * 4;\n}\n\nvar readings = baseDistances.map(function(base, i) {\n    var val = base + noise();\n    if (state.scanCount >= 5 && i === 3) val = base + 18 + noise();\n    if (state.scanCount >= 10 && i === 4) val = base + 31 + noise();\n    return Math.round(val * 10) / 10;\n});\n\nmsg.payload = {\n    timestamp: new Date().toLocaleTimeString(),\n    scanCount: state.scanCount,\n    pointNames: pointNames,\n    readings: readings,\n    state: state\n};\n\nflow.set('facilityState', state);\nreturn msg;",
+        "outputs": 1,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 420,
+        "y": 140,
+        "wires": [
+            [
+                "19a91d59cf99def6"
+            ]
+        ]
+    },
+    {
+        "id": "19a91d59cf99def6",
+        "type": "function",
+        "z": "4056b00ab93f16e8",
+        "name": "Store baseline and compare",
+        "func": "var data = msg.payload;\nvar state = flow.get('facilityState') || { baseline: null, scanCount: 0, changeLog: [] };\nvar THRESHOLD = 10;\n\nif (!state.baseline) {\n    state.baseline = data.readings.slice();\n    flow.set('facilityState', state);\n    var result = {\n        status: 'baseline_set',\n        timestamp: data.timestamp,\n        scanCount: data.scanCount,\n        pointNames: data.pointNames,\n        readings: data.readings,\n        baseline: state.baseline,\n        changes: [],\n        changeLog: [],\n        summary: 'Baseline established',\n        alertLevel: 'info'\n    };\n    flow.set('lastScanData', result);\n    msg.payload = result;\n    return msg;\n}\n\nvar changes = [];\ndata.readings.forEach(function(val, i) {\n    var delta = Math.abs(val - state.baseline[i]);\n    if (delta > THRESHOLD) {\n        changes.push({\n            index: i,\n            point: data.pointNames[i],\n            baseline: state.baseline[i],\n            current: val,\n            delta: Math.round(delta * 10) / 10,\n            direction: val > state.baseline[i] ? 'increased' : 'decreased'\n        });\n    }\n});\n\nif (changes.length > 0) {\n    changes.forEach(function(c) {\n        state.changeLog.unshift({\n            time: data.timestamp,\n            scan: data.scanCount,\n            point: c.point,\n            delta: c.delta,\n            direction: c.direction\n        });\n    });\n    if (state.changeLog.length > 30) state.changeLog = state.changeLog.slice(0, 30);\n    flow.set('facilityState', state);\n}\n\nvar alertLevel = changes.length > 0 ? 'alert' : 'clear';\nvar summary = changes.length > 0 ? changes.length + ' CHANGE(S) DETECTED' : 'All points nominal';\n\nvar result = {\n    status: alertLevel,\n    timestamp: data.timestamp,\n    scanCount: data.scanCount,\n    pointNames: data.pointNames,\n    readings: data.readings,\n    baseline: state.baseline,\n    changes: changes,\n    changeLog: state.changeLog.slice(0, 30),\n    summary: summary,\n    alertLevel: alertLevel\n};\n\nflow.set('lastScanData', result);\nmsg.payload = result;\nreturn msg;",
+        "outputs": 1,
+        "noerr": 0,
+        "x": 700,
+        "y": 140,
+        "wires": [
+            [
+                "f63f6525bfe25aaf"
+            ]
+        ]
+    },
+    {
+        "id": "f63f6525bfe25aaf",
+        "type": "function",
+        "z": "4056b00ab93f16e8",
+        "name": "Prepare all dashboard outputs",
+        "func": "var d = msg.payload;\nvar changedIdx = d.changes.map(function(c) { return c.index; });\n\n// ── 1) SCAN STATUS ──────────────────────────────────────────\nvar statusColor = d.alertLevel === 'alert' ? '#c62828' : d.alertLevel === 'info' ? '#1565c0' : '#2e7d32';\nvar statusBg    = d.alertLevel === 'alert' ? '#ffebee' : d.alertLevel === 'info' ? '#e3f2fd' : '#e8f5e9';\nvar statusBorder= d.alertLevel === 'alert' ? '#ef9a9a' : d.alertLevel === 'info' ? '#90caf9' : '#a5d6a7';\n\nvar m1 = {\n    payload: {\n        scanCount: d.scanCount,\n        timestamp: d.timestamp,\n        summary: d.summary,\n        alertLevel: d.alertLevel,\n        statusColor: statusColor,\n        statusBg: statusBg,\n        statusBorder: statusBorder\n    }\n};\n\n// ── 2) SENSOR MAP ────────────────────────────────────────────\nvar sensorRows = d.pointNames.map(function(name, i) {\n    var isChanged = changedIdx.indexOf(i) >= 0;\n    var baseline  = d.baseline ? d.baseline[i] + ' cm' : '---';\n    var current   = d.readings[i] + ' cm';\n    var delta     = d.baseline ? Math.round(Math.abs(d.readings[i] - d.baseline[i]) * 10) / 10 : 0;\n    var isInfo    = d.alertLevel === 'info';\n\n    var rowBg, badgeColor, badgeBg, badgeText;\n    if (isInfo) {\n        rowBg = '#f0f7ff'; badgeColor = '#1565c0'; badgeBg = '#e3f2fd'; badgeText = 'BASELINE';\n    } else if (isChanged) {\n        rowBg = '#fff8f7'; badgeColor = '#c62828'; badgeBg = '#ffebee'; badgeText = 'CHANGED';\n    } else {\n        rowBg = '#fafafa'; badgeColor = '#2e7d32'; badgeBg = '#e8f5e9'; badgeText = 'OK';\n    }\n\n    return {\n        name: name,\n        baseline: baseline,\n        current: current,\n        delta: isInfo ? '---' : delta + ' cm',\n        badgeText: badgeText,\n        badgeColor: badgeColor,\n        badgeBg: badgeBg,\n        rowBg: rowBg\n    };\n});\n\nvar m2 = { payload: { rows: sensorRows } };\n\n// ── 3) CHANGE LOG ────────────────────────────────────────────\nvar logRows;\nif (!d.changeLog || d.changeLog.length === 0) {\n    logRows = [];\n} else {\n    logRows = d.changeLog.map(function(e) {\n        return { time: e.time, scan: e.scan, point: e.point, direction: e.direction, delta: '+' + e.delta + ' cm' };\n    });\n}\nvar m3 = { payload: { rows: logRows } };\n\n// ── 4) DEBUG ─────────────────────────────────────────────────\nvar m4 = {\n    payload: d.alertLevel === 'alert'\n        ? 'CHANGE at scan #' + d.scanCount + ' — ' + d.changes.map(function(c){ return c.point; }).join(', ')\n        : 'Scan #' + d.scanCount + ': ' + d.summary\n};\n\nreturn [m1, m2, m3, m4];",
+        "outputs": 4,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 430,
+        "y": 300,
+        "wires": [
+            [
+                "5315155f47ea1114"
+            ],
+            [
+                "5eef928d0baf21eb"
+            ],
+            [
+                "16449452445d08ce"
+            ],
+            [
+                "51edc58b52159250"
+            ]
+        ]
+    },
+    {
+        "id": "5315155f47ea1114",
+        "type": "ui_template",
+        "z": "4056b00ab93f16e8",
+        "group": "b077085517919e38",
+        "name": "Scan Status",
+        "order": 1,
+        "width": "6",
+        "height": "4",
+        "format": "<style>\n.status-wrap { padding: 8px; font-family: Arial, sans-serif; }\n.status-pill {\n  display: flex; align-items: center; gap: 10px;\n  padding: 12px 16px; border-radius: 8px; margin-bottom: 14px;\n  border: 1px solid; font-weight: 700; font-size: 14px;\n}\n.status-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }\n.info-grid { border: 1px solid #e0e0e0; border-radius: 8px; overflow: hidden; }\n.info-row { display: flex; border-bottom: 1px solid #f0f0f0; }\n.info-row:last-child { border-bottom: none; }\n.info-label { padding: 11px 14px; font-weight: 600; font-size: 13px; color: #616161; width: 55%; background: #fafafa; }\n.info-val { padding: 11px 14px; font-size: 13px; color: #212121; font-weight: 700; }\n</style>\n<div class=\"status-wrap\">\n  <div class=\"status-pill\" ng-style=\"{background: msg.payload.statusBg, borderColor: msg.payload.statusBorder, color: msg.payload.statusColor}\">\n    <div class=\"status-dot\" ng-style=\"{background: msg.payload.statusColor}\"></div>\n    <span>{{ msg.payload.summary }}</span>\n  </div>\n  <div class=\"info-grid\">\n    <div class=\"info-row\">\n      <div class=\"info-label\">Scans completed</div>\n      <div class=\"info-val\">{{ msg.payload.scanCount }}</div>\n    </div>\n    <div class=\"info-row\">\n      <div class=\"info-label\">Last scan</div>\n      <div class=\"info-val\">{{ msg.payload.timestamp }}</div>\n    </div>\n  </div>\n</div>",
+        "storeOutMessages": true,
+        "fwdInMessages": true,
+        "resendOnRefresh": true,
+        "templateScope": "local",
+        "className": "",
+        "x": 720,
+        "y": 220,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "5eef928d0baf21eb",
+        "type": "ui_template",
+        "z": "4056b00ab93f16e8",
+        "group": "355b33e824bb7956",
+        "name": "Sensor Map Table",
+        "order": 1,
+        "width": "12",
+        "height": "7",
+        "format": "<style>\n.sensor-wrap { padding: 8px; font-family: Arial, sans-serif; }\n.sensor-table { width: 100%; border-collapse: collapse; border: 1px solid #e0e0e0; border-radius: 8px; overflow: hidden; font-size: 13px; }\n.sensor-table th { padding: 10px 14px; background: #1565c0; color: #fff; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; text-align: left; font-weight: 600; }\n.sensor-table th.center { text-align: center; }\n.sensor-table td { padding: 11px 14px; border-bottom: 1px solid #f0f0f0; font-size: 13px; }\n.sensor-table td.center { text-align: center; }\n.sensor-table tr:last-child td { border-bottom: none; }\n.sensor-table .point-name { font-weight: 600; color: #212121; }\n.badge { display: inline-block; font-size: 10px; font-weight: 700; padding: 3px 10px; border-radius: 20px; text-transform: uppercase; letter-spacing: 0.05em; }\n</style>\n<div class=\"sensor-wrap\">\n  <table class=\"sensor-table\">\n    <thead>\n      <tr>\n        <th style=\"width:28%\">Point</th>\n        <th class=\"center\">Baseline</th>\n        <th class=\"center\">Current</th>\n        <th class=\"center\">Delta</th>\n        <th class=\"center\">Status</th>\n      </tr>\n    </thead>\n    <tbody>\n      <tr ng-repeat=\"row in msg.payload.rows\" ng-style=\"{background: row.rowBg}\">\n        <td class=\"point-name\">{{ row.name }}</td>\n        <td class=\"center\">{{ row.baseline }}</td>\n        <td class=\"center\">{{ row.current }}</td>\n        <td class=\"center\">{{ row.delta }}</td>\n        <td class=\"center\">\n          <span class=\"badge\" ng-style=\"{background: row.badgeBg, color: row.badgeColor}\">{{ row.badgeText }}</span>\n        </td>\n      </tr>\n    </tbody>\n  </table>\n</div>",
+        "storeOutMessages": true,
+        "fwdInMessages": true,
+        "resendOnRefresh": true,
+        "templateScope": "local",
+        "className": "",
+        "x": 720,
+        "y": 300,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "16449452445d08ce",
+        "type": "ui_template",
+        "z": "4056b00ab93f16e8",
+        "group": "836b5c9812b9a85f",
+        "name": "Change Event Log",
+        "order": 1,
+        "width": "12",
+        "height": "8",
+        "format": "<style>\n.log-wrap { padding: 8px; font-family: Arial, sans-serif; }\n.log-table { width: 100%; border-collapse: collapse; border: 1px solid #e0e0e0; font-size: 13px; }\n.log-table th { padding: 9px 14px; background: #f5f5f5; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: #757575; border-bottom: 1px solid #e0e0e0; text-align: left; }\n.log-table th.right { text-align: right; }\n.log-table th.center { text-align: center; }\n.log-table td { padding: 10px 14px; border-bottom: 1px solid #f5f5f5; color: #424242; font-size: 12px; }\n.log-table td.right { text-align: right; font-weight: 700; color: #c62828; }\n.log-table td.center { text-align: center; }\n.log-table td.bold { font-weight: 600; color: #212121; }\n.log-table td.muted { color: #9e9e9e; }\n.log-table tr:last-child td { border-bottom: none; }\n.log-empty { padding: 24px; text-align: center; color: #9e9e9e; font-size: 13px; }\n.log-scroll { max-height: 260px; overflow-y: auto; }\n</style>\n<div class=\"log-wrap\">\n  <div class=\"log-scroll\">\n    <table class=\"log-table\">\n      <thead>\n        <tr>\n          <th>Time</th>\n          <th class=\"center\">Scan</th>\n          <th>Point</th>\n          <th>Direction</th>\n          <th class=\"right\">Delta</th>\n        </tr>\n      </thead>\n      <tbody>\n        <tr ng-if=\"msg.payload.rows.length === 0\">\n          <td colspan=\"5\" class=\"log-empty\">No changes detected yet</td>\n        </tr>\n        <tr ng-repeat=\"row in msg.payload.rows\">\n          <td class=\"muted\">{{ row.time }}</td>\n          <td class=\"center muted\">#{{ row.scan }}</td>\n          <td class=\"bold\">{{ row.point }}</td>\n          <td class=\"muted\">{{ row.direction }}</td>\n          <td class=\"right\">{{ row.delta }}</td>\n        </tr>\n      </tbody>\n    </table>\n  </div>\n</div>",
+        "storeOutMessages": true,
+        "fwdInMessages": true,
+        "resendOnRefresh": true,
+        "templateScope": "local",
+        "className": "",
+        "x": 720,
+        "y": 380,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "51edc58b52159250",
+        "type": "debug",
+        "z": "4056b00ab93f16e8",
+        "name": "Debug",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": true,
+        "complete": "payload",
+        "targetType": "msg",
+        "x": 720,
+        "y": 460,
+        "wires": []
+    },
+    {
+        "id": "b077085517919e38",
+        "type": "ui_group",
+        "name": "Scan Status",
+        "tab": "bbdc13a2aa5a8d43",
+        "order": 1,
+        "disp": true,
+        "width": "6",
+        "collapse": false,
+        "className": ""
+    },
+    {
+        "id": "355b33e824bb7956",
+        "type": "ui_group",
+        "name": "Facility Sensor Map",
+        "tab": "bbdc13a2aa5a8d43",
+        "order": 2,
+        "disp": true,
+        "width": "12",
+        "collapse": false
+    },
+    {
+        "id": "836b5c9812b9a85f",
+        "type": "ui_group",
+        "name": "Change Event Log",
+        "tab": "bbdc13a2aa5a8d43",
+        "order": 3,
+        "disp": true,
+        "width": "6",
+        "collapse": false
+    },
+    {
+        "id": "bbdc13a2aa5a8d43",
+        "type": "ui_tab",
+        "name": "3D Facility Monitor",
+        "icon": "dashboard",
+        "order": 1,
+        "disabled": false,
+        "hidden": false
+    },
+    {
+        "id": "fb66a5034fdc8aa5",
+        "type": "global-config",
+        "env": [],
+        "modules": {
+            "node-red-dashboard": "3.6.6"
+        }
+    }
+]
